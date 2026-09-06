@@ -15,6 +15,22 @@ services:
       - mongo
     restart: unless-stopped
 
+  auth:
+    image: microservices-auth:prod
+    build:
+      context: .
+      dockerfile: ./apps/auth/Dockerfile
+      target: production
+    environment:
+      NODE_ENV: production
+      MONGODB_URI: mongodb://mongo:27017/auth
+      PORT: 3001
+    ports:
+      - '3001:3001'
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
   mongo:
     image: mongo:7
     volumes:

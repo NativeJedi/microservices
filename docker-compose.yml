@@ -5,12 +5,30 @@ services:
       context: .
       dockerfile: ./apps/reservations/Dockerfile
       target: development
-    command: pnpm exec nest start reservations --watch
+    command: pnpm start:service -- reservations
     environment:
       MONGODB_URI: mongodb://mongo:27017/sleepr
       PORT: 3000
     ports:
       - '3000:3000'
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+    depends_on:
+      - mongo
+
+  auth:
+    image: microservices-auth:dev
+    build:
+      context: .
+      dockerfile: ./apps/auth/Dockerfile
+      target: development
+    command: pnpm start:service -- auth
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/auth
+      PORT: 3001
+    ports:
+      - '3001:3001'
     volumes:
       - .:/usr/src/app
       - /usr/src/app/node_modules
