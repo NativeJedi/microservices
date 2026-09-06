@@ -1,28 +1,25 @@
 services:
   reservations:
-    image: microservices-reservations:dev
+    image: microservices-reservations:prod
     build:
       context: .
       dockerfile: ./apps/reservations/Dockerfile
-      target: development
-    command: pnpm exec nest start reservations --watch
+      target: production
     environment:
+      NODE_ENV: production
       MONGODB_URI: mongodb://mongo:27017/sleepr
       PORT: 3000
     ports:
       - '3000:3000'
-    volumes:
-      - .:/usr/src/app
-      - /usr/src/app/node_modules
     depends_on:
       - mongo
+    restart: unless-stopped
 
   mongo:
     image: mongo:7
-    ports:
-      - '27017:27017'
     volumes:
       - mongo-data:/data/db
+    restart: unless-stopped
 
 volumes:
   mongo-data:
