@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const envSchema = z.object({
+export const commonEnvValidationRules = {
   MONGODB_URI: z
     .string()
     .refine(
@@ -8,6 +8,4 @@ export const envSchema = z.object({
       'must start with mongodb:// or mongodb+srv://',
     ),
   PORT: z.coerce.number().int().positive().default(3000),
-});
-
-export type Env = z.infer<typeof envSchema>;
+};
