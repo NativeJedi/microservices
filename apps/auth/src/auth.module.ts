@@ -17,6 +17,7 @@ import { JwtStrategy } from './strategies/jwt.strategy';
         NODE_ENV: z.string().default('development'),
         MONGODB_URI: commonEnvValidationRules.MONGODB_URI,
         PORT: commonEnvValidationRules.PORT,
+        TCP_PORT: commonEnvValidationRules.PORT,
         JWT_SECRET: z.string(),
         JWT_EXPIRATION: z.coerce.number().positive(),
       }),

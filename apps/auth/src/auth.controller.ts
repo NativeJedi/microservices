@@ -2,9 +2,10 @@ import { Controller, Post, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { AuthGuard } from '@nestjs/passport';
 import { ConfigService } from '@nestjs/config';
+import { CurrentUser } from '@app/common';
 import { AuthService } from './auth.service';
 import { UserDocument } from './users/entities/user.entity';
-import { CurrentUser } from './decorators/current-user.decorator';
+import { MessagePattern, Payload } from '@nestjs/microservices';
 
 @Controller('auth')
 export class AuthController {
@@ -32,5 +33,11 @@ export class AuthController {
     const { password, ...userResponse } = user;
 
     return userResponse;
+  }
+
+  @UseGuards(AuthGuard('jwt'))
+  @MessagePattern('authenticate')
+  async authenticate(@Payload() data: { user: UserDocument }) {
+    return data.user;
   }
 }
