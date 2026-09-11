@@ -33,6 +33,23 @@ services:
     depends_on:
       - mongo
 
+  payments:
+    image: microservices-payments:dev
+    build:
+      context: .
+      dockerfile: ./apps/payments/Dockerfile
+      target: development
+    command: pnpm start:service -- payments
+    env_file:
+      - ./apps/payments/.env
+    ports:
+      - '3003:3003'
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+    depends_on:
+      - mongo
+
   mongo:
     image: mongo:7
     ports:

@@ -2,7 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Logger } from 'nestjs-pino';
-import * as cookieParser from 'cookie-parser';
+import cookieParser from 'cookie-parser';
 import { AuthModule } from './auth.module';
 import { Transport } from '@nestjs/microservices';
 

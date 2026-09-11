@@ -3,8 +3,9 @@ import {
   ExecutionContext,
   Inject,
   Injectable,
+  UnauthorizedException,
 } from '@nestjs/common';
-import { map, Observable, tap } from 'rxjs';
+import { catchError, map, Observable, tap, throwError } from 'rxjs';
 import { AUTH_SERVICE } from '@app/common/constants';
 import { ClientProxy } from '@nestjs/microservices';
 import { UserDto } from '@app/common/dto';
@@ -31,6 +32,8 @@ export class JwtAuthGuard implements CanActivate {
           context.switchToHttp().getRequest().user = res;
         }),
         map(() => true),
+        // Auth failures arrive as generic RPC errors, which Nest would turn into 500.
+        catchError(() => throwError(() => new UnauthorizedException())),
       );
   }
 }

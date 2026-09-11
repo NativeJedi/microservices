@@ -1,43 +1,56 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { catchError, lastValueFrom, throwError } from 'rxjs';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
 import { ReservationsRepository } from './reservations.repository';
+import { CreateChargeDto, PAYMENTS_SERVICE } from '@app/common';
+import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
 export class ReservationsService {
   constructor(
     private readonly reservationsRepository: ReservationsRepository,
+    @Inject(PAYMENTS_SERVICE) private readonly paymentsService: ClientProxy,
   ) {}
 
-  create(
-    { startDate, endDate, ...rest }: CreateReservationDto,
-    userId: string,
-  ) {
+  async create(createReservationDto: CreateReservationDto, userId: string) {
+    const { id } = await this.chargeOrFail(createReservationDto.charge);
+
     return this.reservationsRepository.create({
-      ...rest,
-      startDate: new Date(startDate),
-      endDate: new Date(endDate),
+      ...createReservationDto,
       timestamp: new Date(),
       userId,
+      invoiceId: id,
     });
   }
 
-  findAll() {
+  private async chargeOrFail(charge: CreateChargeDto) {
+    return lastValueFrom(
+      this.paymentsService.send('create_charge', charge).pipe(
+        // The payments service reports declines as RPC errors, which would otherwise surface as 500.
+        catchError((error) =>
+          throwError(() => new BadRequestException(error.message ?? error)),
+        ),
+      ),
+    );
+  }
+
+  async findAll() {
     return this.reservationsRepository.find({});
   }
 
-  findOne(id: string) {
+  async findOne(id: string) {
     return this.reservationsRepository.findOne({ _id: id });
   }
 
-  update(id: string, updateReservationDto: UpdateReservationDto) {
+  async update(id: string, updateReservationDto: UpdateReservationDto) {
     return this.reservationsRepository.findOneAndUpdate(
       { _id: id },
       { $set: updateReservationDto },
     );
   }
 
-  remove(id: string) {
+  async remove(id: string) {
     return this.reservationsRepository.findOneAndDelete({ _id: id });
   }
 }

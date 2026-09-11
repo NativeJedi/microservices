@@ -6,6 +6,7 @@ import {
   commonEnvValidationRules,
   DatabaseModule,
   LoggerModule,
+  PAYMENTS_SERVICE,
 } from '@app/common';
 import { ReservationsRepository } from './reservations.repository';
 import {
@@ -25,6 +26,8 @@ import { ClientsModule, Transport } from '@nestjs/microservices';
         PORT: commonEnvValidationRules.PORT,
         AUTH_HOST: z.string(),
         AUTH_PORT: commonEnvValidationRules.PORT,
+        PAYMENTS_HOST: z.string(),
+        PAYMENTS_PORT: commonEnvValidationRules.PORT,
       }),
     }),
     LoggerModule,
@@ -40,6 +43,17 @@ import { ClientsModule, Transport } from '@nestjs/microservices';
           options: {
             host: configService.get('AUTH_HOST'),
             port: configService.get('AUTH_PORT'),
+          },
+        }),
+        inject: [ConfigService],
+      },
+      {
+        name: PAYMENTS_SERVICE,
+        useFactory: (configService: ConfigService) => ({
+          transport: Transport.TCP,
+          options: {
+            host: configService.get('PAYMENTS_HOST'),
+            port: configService.get('PAYMENTS_PORT'),
           },
         }),
         inject: [ConfigService],
