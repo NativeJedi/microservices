@@ -8,7 +8,7 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
-RUN pnpm build payments
+RUN pnpm build notifications
 
 FROM node:22-alpine AS production
 
@@ -24,4 +24,4 @@ RUN pnpm install --frozen-lockfile --prod
 
 COPY --from=development /usr/src/app/dist ./dist
 
-CMD ["node", "dist/apps/payments/main"]
+CMD ["node", "dist/apps/notifications/main"]

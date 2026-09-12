@@ -35,8 +35,18 @@ services:
       target: production
     env_file:
       - ./apps/payments/.env
-    ports:
-      - '3003:3003'
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
+  notifications:
+    image: microservices-notifications:prod
+    build:
+      context: .
+      dockerfile: ./apps/notifications/Dockerfile
+      target: production
+    env_file:
+      - ./apps/notifications/.env
     depends_on:
       - mongo
     restart: unless-stopped

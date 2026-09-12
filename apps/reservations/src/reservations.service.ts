@@ -3,7 +3,7 @@ import { catchError, lastValueFrom, throwError } from 'rxjs';
 import { CreateReservationDto } from './dto/create-reservation.dto';
 import { UpdateReservationDto } from './dto/update-reservation.dto';
 import { ReservationsRepository } from './reservations.repository';
-import { CreateChargeDto, PAYMENTS_SERVICE } from '@app/common';
+import { CreateChargeDto, PAYMENTS_SERVICE, UserDto } from '@app/common';
 import { ClientProxy } from '@nestjs/microservices';
 
 @Injectable()
@@ -13,8 +13,14 @@ export class ReservationsService {
     @Inject(PAYMENTS_SERVICE) private readonly paymentsService: ClientProxy,
   ) {}
 
-  async create(createReservationDto: CreateReservationDto, userId: string) {
-    const { id } = await this.chargeOrFail(createReservationDto.charge);
+  async create(
+    createReservationDto: CreateReservationDto,
+    { email, _id: userId }: UserDto,
+  ) {
+    const { id } = await this.chargeOrFail({
+      ...createReservationDto.charge,
+      email,
+    });
 
     return this.reservationsRepository.create({
       ...createReservationDto,
@@ -24,7 +30,9 @@ export class ReservationsService {
     });
   }
 
-  private async chargeOrFail(charge: CreateChargeDto) {
+  private async chargeOrFail(
+    charge: CreateChargeDto & { email: UserDto['email'] },
+  ) {
     return lastValueFrom(
       this.paymentsService.send('create_charge', charge).pipe(
         // The payments service reports declines as RPC errors, which would otherwise surface as 500.

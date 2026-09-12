@@ -42,8 +42,21 @@ services:
     command: pnpm start:service -- payments
     env_file:
       - ./apps/payments/.env
-    ports:
-      - '3003:3003'
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+    depends_on:
+      - mongo
+
+  notifications:
+    image: microservices-notifications:dev
+    build:
+      context: .
+      dockerfile: ./apps/notifications/Dockerfile
+      target: development
+    command: pnpm start:service -- notifications
+    env_file:
+      - ./apps/notifications/.env
     volumes:
       - .:/usr/src/app
       - /usr/src/app/node_modules
