@@ -5,6 +5,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import {
   commonEnvValidationRules,
   LoggerModule,
+  NOTIFICATIONS_QUEUE,
+  NOTIFICATIONS_QUEUE_OPTIONS,
   NOTIFICATIONS_SERVICE,
 } from '@app/common';
 import z from 'zod';
@@ -16,8 +18,7 @@ import { ClientsModule, Transport } from '@nestjs/microservices';
       isGlobal: true,
       validationSchema: z.object({
         PORT: commonEnvValidationRules.PORT,
-        NOTIFICATIONS_HOST: z.string(),
-        NOTIFICATIONS_PORT: commonEnvValidationRules.PORT,
+        RABBITMQ_URI: z.string(),
         STRIPE_SECRET_KEY: z.string(),
       }),
     }),
@@ -26,10 +27,11 @@ import { ClientsModule, Transport } from '@nestjs/microservices';
       {
         name: NOTIFICATIONS_SERVICE,
         useFactory: (configService: ConfigService) => ({
-          transport: Transport.TCP,
+          transport: Transport.RMQ,
           options: {
-            host: configService.getOrThrow('NOTIFICATIONS_HOST'),
-            port: configService.getOrThrow('NOTIFICATIONS_PORT'),
+            urls: [configService.getOrThrow<string>('RABBITMQ_URI')],
+            queue: NOTIFICATIONS_QUEUE,
+            queueOptions: NOTIFICATIONS_QUEUE_OPTIONS,
           },
         }),
         inject: [ConfigService],

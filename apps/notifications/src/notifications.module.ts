@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { NotificationsController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
 import { ConfigModule } from '@nestjs/config';
-import { commonEnvValidationRules, LoggerModule } from '@app/common';
+import { LoggerModule } from '@app/common';
 import { z } from 'zod';
 
 @Module({
@@ -10,7 +10,7 @@ import { z } from 'zod';
     ConfigModule.forRoot({
       isGlobal: true,
       validationSchema: z.object({
-        PORT: commonEnvValidationRules.PORT,
+        RABBITMQ_URI: z.string(),
         SMTP_USER: z.string(),
         GOOGLE_OAUTH_CLIENT_ID: z.string(),
         GOOGLE_OAUTH_CLIENT_SECRET: z.string(),

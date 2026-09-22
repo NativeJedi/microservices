@@ -43,7 +43,7 @@ export class PaymentsService {
 
       this.notificationsService.emit('notify_email', {
         email,
-        text: `Payment of $${amount * 100} received`,
+        text: `Payment of $${amount} received`,
       });
 
       return response;

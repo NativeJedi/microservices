@@ -1,16 +1,28 @@
 import { NestFactory } from '@nestjs/core';
 import { NotificationsModule } from './notifications.module';
 import { ConfigService } from '@nestjs/config';
-import { Transport } from '@nestjs/microservices';
+import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { Logger } from 'nestjs-pino';
+import { NOTIFICATIONS_QUEUE, NOTIFICATIONS_QUEUE_OPTIONS } from '@app/common';
+import { setupRabbit } from './rabbit-topology';
 
 async function bootstrap() {
   const app = await NestFactory.create(NotificationsModule);
   const configService = app.get(ConfigService);
 
-  app.connectMicroservice({
-    transport: Transport.TCP,
-    options: { host: '0.0.0.0', port: configService.get('PORT') },
+  const rabbitUrl = configService.getOrThrow<string>('RABBITMQ_URI');
+
+  await setupRabbit(rabbitUrl);
+
+  app.connectMicroservice<MicroserviceOptions>({
+    transport: Transport.RMQ,
+    options: {
+      urls: [rabbitUrl],
+      queue: NOTIFICATIONS_QUEUE,
+      queueOptions: NOTIFICATIONS_QUEUE_OPTIONS,
+      noAck: false,
+      prefetchCount: 10,
+    },
   });
 
   app.useLogger(app.get(Logger));
