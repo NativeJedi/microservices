@@ -32,4 +32,8 @@ export class NotificationsService {
       text,
     });
   }
+
+  onApplicationShutdown() {
+    this.transporter.close();
+  }
 }

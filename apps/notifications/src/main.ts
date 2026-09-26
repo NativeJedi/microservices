@@ -8,6 +8,8 @@ import { setupRabbit } from './rabbit-topology';
 
 async function bootstrap() {
   const app = await NestFactory.create(NotificationsModule);
+  app.enableShutdownHooks();
+
   const configService = app.get(ConfigService);
 
   const rabbitUrl = configService.getOrThrow<string>('RABBITMQ_URI');

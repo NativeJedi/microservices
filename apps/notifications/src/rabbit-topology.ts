@@ -8,7 +8,10 @@ import {
   NOTIFICATIONS_RETRY_QUEUE,
 } from '@app/common';
 
-export async function setupRabbit(url: string) {
+export async function setupRabbit(
+  url: string,
+  retryDelayMs = NOTIFICATIONS_RETRY_DELAY,
+) {
   const connection = await amqp.connect(url);
   const channel = await connection.createChannel();
 
@@ -18,7 +21,7 @@ export async function setupRabbit(url: string) {
   await channel.assertQueue(NOTIFICATIONS_RETRY_QUEUE, {
     durable: true,
     arguments: {
-      'x-message-ttl': NOTIFICATIONS_RETRY_DELAY,
+      'x-message-ttl': retryDelayMs,
       'x-dead-letter-exchange': '',
       'x-dead-letter-routing-key': NOTIFICATIONS_QUEUE,
     },
