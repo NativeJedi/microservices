@@ -34,7 +34,7 @@ export abstract class AbstractRepository<TDocument extends AbstractDocument> {
     updateQuery: UpdateQuery<TDocument>,
   ): Promise<TDocument> {
     const document = await this.model
-      .findOneAndUpdate(filterQuery, updateQuery, { new: true })
+      .findOneAndUpdate(filterQuery, updateQuery, { returnDocument: 'after' })
       .lean<TDocument>(true);
 
     if (!document) {
@@ -53,9 +53,7 @@ export abstract class AbstractRepository<TDocument extends AbstractDocument> {
     filterQuery: QueryFilter<TDocument>,
   ): Promise<TDocument> {
     const document = await this.model
-      .findOneAndDelete(filterQuery, {
-        new: true,
-      })
+      .findOneAndDelete(filterQuery)
       .lean<TDocument>(true);
 
     if (!document) {
@@ -64,5 +62,28 @@ export abstract class AbstractRepository<TDocument extends AbstractDocument> {
     }
 
     return document;
+  }
+
+  /**
+   * Same as findOne, but returns null instead of throwing.
+   * Use it when a missing document is an expected outcome.
+   */
+  async findOneOrNull(
+    filterQuery: QueryFilter<TDocument>,
+  ): Promise<TDocument | null> {
+    return this.model.findOne(filterQuery).lean<TDocument>(true);
+  }
+
+  /**
+   * Conditional update. Returns null when the filter matched nothing —
+   * this means another process changed the document first, which is normal.
+   */
+  async findOneAndUpdateOrNull(
+    filterQuery: QueryFilter<TDocument>,
+    updateQuery: UpdateQuery<TDocument>,
+  ): Promise<TDocument | null> {
+    return this.model
+      .findOneAndUpdate(filterQuery, updateQuery, { returnDocument: 'after' })
+      .lean<TDocument>(true);
   }
 }

@@ -7,6 +7,8 @@ import {
   Param,
   Delete,
   UseGuards,
+  BadRequestException,
+  Headers,
 } from '@nestjs/common';
 import { ReservationsService } from './reservations.service';
 import { CreateReservationDto } from './dto/create-reservation.dto';
@@ -22,8 +24,13 @@ export class ReservationsController {
   create(
     @Body() createReservationDto: CreateReservationDto,
     @CurrentUser() user: UserDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    return this.reservationsService.create(createReservationDto, user);
+    if (!idempotencyKey) {
+      throw new BadRequestException('Idempotency-Key header is required');
+    }
+
+    return this.reservationsService.create(createReservationDto, user, idempotencyKey);
   }
 
   @Get()

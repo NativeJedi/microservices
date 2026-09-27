@@ -6,13 +6,7 @@ import {
 import * as bcrypt from 'bcryptjs';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UsersRepository } from './users.repository';
-
-const DUPLICATE_KEY_ERROR_CODE = 11000;
-
-const isDuplicateKeyError = (error: unknown): boolean =>
-  error instanceof Error &&
-  'code' in error &&
-  error.code === DUPLICATE_KEY_ERROR_CODE;
+import { isDuplicateKeyError } from '@app/common';
 
 @Injectable()
 export class UsersService {

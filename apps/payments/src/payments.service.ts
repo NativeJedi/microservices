@@ -1,24 +1,30 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import Stripe from 'stripe';
 import { ConfigService } from '@nestjs/config';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { NOTIFICATIONS_SERVICE } from '@app/common';
 import { PaymentsCreateChargeDto } from './dto/payments-create-charge.dto';
 
-const toChargeFailureMessage = (error: unknown): string =>
-  error instanceof Stripe.errors.StripeError
-    ? error.message
-    : 'Payment provider is unavailable';
+const toChargeFailure = (error: unknown) => {
+  if (error instanceof Stripe.errors.StripeCardError) {
+    return { kind: 'declined' as const, message: error.message };
+  }
+
+  if (error instanceof Stripe.errors.StripeError) {
+    // invalid_request, api_error, etc
+    return { kind: 'rejected' as const, message: error.message };
+  }
+
+  // network, timeout, etc
+  return { kind: 'unknown' as const, message: 'Payment status unknown' };
+};
 
 @Injectable()
 export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
   private readonly stripe: Stripe;
 
-  constructor(
-    private readonly configService: ConfigService,
-    @Inject(NOTIFICATIONS_SERVICE)
-    private readonly notificationsService: ClientProxy,
-  ) {
+  constructor(private readonly configService: ConfigService) {
     this.stripe = new Stripe(
       this.configService.getOrThrow('STRIPE_SECRET_KEY'),
       {
@@ -34,25 +40,20 @@ export class PaymentsService {
     idempotencyKey,
   }: PaymentsCreateChargeDto) {
     try {
-      const response = await this.stripe.paymentIntents.create(
+      return await this.stripe.paymentIntents.create(
         {
           amount: Math.round(amount * 100),
           payment_method: paymentMethodId,
           payment_method_types: ['card'],
           currency: 'usd',
           confirm: true,
+          receipt_email: email, // stripe will send receipt to this email
         },
         { idempotencyKey },
       );
-
-      this.notificationsService.emit('notify_email', {
-        email,
-        text: `Payment of $${amount} received`,
-      });
-
-      return response;
     } catch (error) {
-      throw new RpcException(toChargeFailureMessage(error));
+      this.logger.error({ err: error, idempotencyKey }, 'charge failed');
+      throw new RpcException(toChargeFailure(error));
     }
   }
 }

@@ -6,6 +6,9 @@ import {
   commonEnvValidationRules,
   DatabaseModule,
   LoggerModule,
+  NOTIFICATIONS_QUEUE,
+  NOTIFICATIONS_QUEUE_OPTIONS,
+  NOTIFICATIONS_SERVICE,
   PAYMENTS_SERVICE,
 } from '@app/common';
 import { ReservationsRepository } from './reservations.repository';
@@ -16,6 +19,10 @@ import {
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { z } from 'zod';
 import { ClientsModule, Transport } from '@nestjs/microservices';
+import { ScheduleModule } from '@nestjs/schedule';
+import { PaymentsGateway } from './payments.gateway';
+import { OutboxRelay } from './outbox/outbox.relay';
+import { ReconciliationService } from './reconciliation.service';
 
 @Module({
   imports: [
@@ -23,6 +30,7 @@ import { ClientsModule, Transport } from '@nestjs/microservices';
       isGlobal: true,
       validationSchema: z.object({
         MONGODB_URI: commonEnvValidationRules.MONGODB_URI,
+        RABBITMQ_URI: z.string(),
         PORT: commonEnvValidationRules.PORT,
         AUTH_HOST: z.string(),
         AUTH_PORT: commonEnvValidationRules.PORT,
@@ -30,6 +38,7 @@ import { ClientsModule, Transport } from '@nestjs/microservices';
         PAYMENTS_PORT: commonEnvValidationRules.PORT,
       }),
     }),
+    ScheduleModule.forRoot(),
     LoggerModule,
     DatabaseModule,
     DatabaseModule.forFeature([
@@ -58,9 +67,27 @@ import { ClientsModule, Transport } from '@nestjs/microservices';
         }),
         inject: [ConfigService],
       },
+      {
+        name: NOTIFICATIONS_SERVICE,
+        useFactory: (configService: ConfigService) => ({
+          transport: Transport.RMQ,
+          options: {
+            urls: [configService.getOrThrow<string>('RABBITMQ_URI')],
+            queue: NOTIFICATIONS_QUEUE,
+            queueOptions: NOTIFICATIONS_QUEUE_OPTIONS,
+          },
+        }),
+        inject: [ConfigService],
+      },
     ]),
   ],
   controllers: [ReservationsController],
-  providers: [ReservationsService, ReservationsRepository],
+  providers: [
+    ReservationsService,
+    ReservationsRepository,
+    PaymentsGateway,
+    OutboxRelay,
+    ReconciliationService,
+  ],
 })
 export class ReservationsModule {}

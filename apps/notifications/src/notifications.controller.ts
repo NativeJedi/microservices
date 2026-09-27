@@ -37,6 +37,10 @@ export class NotificationsController {
 
   constructor(private readonly notificationsService: NotificationsService) {}
 
+  // Events arrive at-least-once: the outbox relay may republish after a crash,
+  // and RabbitMQ redelivers unacked messages. Sending a duplicate email is
+  // acceptable here, so there is no deduplication by `eventId`.
+  // Copy this handler for anything with real side effects and add one.
   @EventPattern('notify_email')
   async notifyEmail(
     @Payload() data: NotifyEmailDto,
