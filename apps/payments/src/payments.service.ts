@@ -31,15 +31,19 @@ export class PaymentsService {
     paymentMethodId,
     amount,
     email,
+    idempotencyKey,
   }: PaymentsCreateChargeDto) {
     try {
-      const response = await this.stripe.paymentIntents.create({
-        amount: amount * 100,
-        payment_method: paymentMethodId,
-        payment_method_types: ['card'],
-        currency: 'usd',
-        confirm: true,
-      });
+      const response = await this.stripe.paymentIntents.create(
+        {
+          amount: Math.round(amount * 100),
+          payment_method: paymentMethodId,
+          payment_method_types: ['card'],
+          currency: 'usd',
+          confirm: true,
+        },
+        { idempotencyKey },
+      );
 
       this.notificationsService.emit('notify_email', {
         email,

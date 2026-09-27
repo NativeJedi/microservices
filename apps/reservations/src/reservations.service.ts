@@ -5,6 +5,7 @@ import { UpdateReservationDto } from './dto/update-reservation.dto';
 import { ReservationsRepository } from './reservations.repository';
 import { CreateChargeDto, PAYMENTS_SERVICE, UserDto } from '@app/common';
 import { ClientProxy } from '@nestjs/microservices';
+import { Types } from 'mongoose';
 
 @Injectable()
 export class ReservationsService {
@@ -17,9 +18,14 @@ export class ReservationsService {
     createReservationDto: CreateReservationDto,
     { email, _id: userId }: UserDto,
   ) {
+    const reservationId = new Types.ObjectId();
+
+    const idempotencyKey = `reservation-${reservationId.toHexString()}`; // protection only against inner retries
+
     const { id } = await this.chargeOrFail({
       ...createReservationDto.charge,
       email,
+      idempotencyKey,
     });
 
     return this.reservationsRepository.create({
@@ -31,7 +37,10 @@ export class ReservationsService {
   }
 
   private async chargeOrFail(
-    charge: CreateChargeDto & { email: UserDto['email'] },
+    charge: CreateChargeDto & {
+      email: UserDto['email'];
+      idempotencyKey: string;
+    },
   ) {
     return lastValueFrom(
       this.paymentsService.send('create_charge', charge).pipe(

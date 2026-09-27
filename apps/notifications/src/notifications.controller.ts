@@ -1,4 +1,4 @@
-import { Controller } from '@nestjs/common';
+import { Controller, Logger } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { Ctx, EventPattern, Payload, RmqContext } from '@nestjs/microservices';
 import { NotifyEmailDto } from './dto/notify-email.dto';
@@ -6,6 +6,8 @@ import { plainToInstance } from 'class-transformer';
 import { validate, ValidationError } from 'class-validator';
 import { NOTIFICATIONS_DLQ_EXCHANGE, NOTIFICATIONS_QUEUE } from '@app/common';
 import type { Channel, ConsumeMessage } from 'amqplib';
+import { once } from 'node:events';
+import type { EventEmitter } from 'node:events';
 
 const MAX_ATTEMPTS = 5;
 const MAX_FAILURE_REASON_LENGTH = 500;
@@ -31,6 +33,8 @@ function formatValidationErrors(errors: ValidationError[]): string {
 
 @Controller()
 export class NotificationsController {
+  private readonly logger = new Logger(NotificationsController.name);
+
   constructor(private readonly notificationsService: NotificationsService) {}
 
   @EventPattern('notify_email')
@@ -46,7 +50,7 @@ export class NotificationsController {
     const errors = await validate(dto);
     if (errors.length) {
       const reason = formatValidationErrors(errors);
-      this.moveToDlq(channel, message, reason, attempt);
+      await this.moveToDlq(channel, message, reason, attempt);
       return;
     }
 
@@ -65,34 +69,49 @@ export class NotificationsController {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       if (attempt >= MAX_ATTEMPTS) {
-        this.moveToDlq(channel, message, reason, attempt);
+        await this.moveToDlq(channel, message, reason, attempt);
         return;
       }
 
-      console.warn(`[notifications] retry ${attempt}/${MAX_ATTEMPTS}`, reason);
+      this.logger.warn(
+        { attempt, maxAttempts: MAX_ATTEMPTS, reason },
+        'retry scheduled',
+      );
       channel.nack(message, false, false);
     }
   }
 
-  private moveToDlq(
+  private async moveToDlq(
     channel: Channel,
     message: ConsumeMessage,
     reason: string,
     attempt: number,
   ) {
-    console.error(
-      `[notifications] moving to DLQ after ${attempt} attempt(s)`,
-      reason,
-    );
+    const messageId = message.properties.messageId as string | undefined;
+    this.logger.error({ attempt, reason, messageId }, 'moved to DLQ');
 
-    channel.publish(NOTIFICATIONS_DLQ_EXCHANGE, '', message.content, {
-      ...message.properties,
-      headers: {
-        ...message.properties.headers,
-        'x-failure-reason': reason.slice(0, MAX_FAILURE_REASON_LENGTH),
-        'x-attempts': attempt,
-      },
-    });
-    channel.ack(message);
+    try {
+      const flushed = channel.publish(
+        NOTIFICATIONS_DLQ_EXCHANGE,
+        '',
+        message.content,
+        {
+          ...message.properties,
+          headers: {
+            ...message.properties.headers,
+            'x-failure-reason': reason.slice(0, MAX_FAILURE_REASON_LENGTH),
+            'x-attempts': attempt,
+          },
+        },
+      );
+
+      if (!flushed) {
+        await once(channel as unknown as EventEmitter, 'drain');
+      }
+
+      channel.ack(message);
+    } catch (err: unknown) {
+      this.logger.error({ err }, 'failed to move message to DLQ');
+    }
   }
 }

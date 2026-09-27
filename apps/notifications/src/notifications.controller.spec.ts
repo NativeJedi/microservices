@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { RmqContext } from '@nestjs/microservices';
 import type { ConsumeMessage, MessageProperties, Options } from 'amqplib';
@@ -35,13 +37,19 @@ function buildMessage(
   } as unknown as ConsumeMessage;
 }
 
+// amqplib's Channel is an EventEmitter: publish() returns false when the
+// write buffer is full and the channel emits 'drain' once it has space again.
 function buildChannel() {
-  return {
+  return Object.assign(new EventEmitter(), {
     ack: jest.fn<void, [ConsumeMessage]>(),
     nack: jest.fn<void, [ConsumeMessage, boolean, boolean]>(),
-    publish: jest.fn<boolean, [string, string, Buffer, Options.Publish]>(),
-  };
+    publish: jest
+      .fn<boolean, [string, string, Buffer, Options.Publish]>()
+      .mockReturnValue(true),
+  });
 }
+
+const flushAsync = () => new Promise((resolve) => setImmediate(resolve));
 
 function buildContext(channel: object, message: ConsumeMessage): RmqContext {
   return {
@@ -54,6 +62,8 @@ describe('NotificationsController', () => {
   let controller: NotificationsController;
   let notifyEmail: jest.Mock<Promise<void>, [NotifyEmailDto]>;
   let channel: ReturnType<typeof buildChannel>;
+  let warnLog: jest.SpyInstance;
+  let errorLog: jest.SpyInstance;
 
   beforeEach(async () => {
     notifyEmail = jest
@@ -67,8 +77,8 @@ describe('NotificationsController', () => {
     }).compile();
 
     controller = moduleRef.get(NotificationsController);
-    jest.spyOn(console, 'warn').mockImplementation(() => {});
-    jest.spyOn(console, 'error').mockImplementation(() => {});
+    warnLog = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    errorLog = jest.spyOn(Logger.prototype, 'error').mockImplementation();
   });
 
   afterEach(() => jest.restoreAllMocks());
@@ -120,6 +130,16 @@ describe('NotificationsController', () => {
 
       expect(channel.nack).toHaveBeenCalledTimes(1);
       expect(channel.publish).not.toHaveBeenCalled();
+    });
+
+    it('logs a warning with the attempt number and reason', async () => {
+      await handle(VALID_PAYLOAD, buildMessage(2));
+
+      expect(warnLog).toHaveBeenCalledWith(
+        { attempt: 3, maxAttempts: 5, reason: 'SMTP down' },
+        'retry scheduled',
+      );
+      expect(errorLog).not.toHaveBeenCalled();
     });
   });
 
@@ -192,6 +212,101 @@ describe('NotificationsController', () => {
 
       expect(channel.publish).toHaveBeenCalledTimes(1);
       expect(getDlqPublishOptions().headers).toHaveProperty('x-attempts', 5);
+    });
+
+    it('logs an error with the attempt, reason and message id', async () => {
+      await handle(VALID_PAYLOAD, buildMessage(4, { messageId: 'msg-1' }));
+
+      expect(errorLog).toHaveBeenCalledWith(
+        { attempt: 5, reason: 'SMTP down', messageId: 'msg-1' },
+        'moved to DLQ',
+      );
+      expect(warnLog).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('full publish buffer', () => {
+    const dlqCases = [
+      ['last failed attempt', VALID_PAYLOAD, buildMessage(4)],
+      [
+        'invalid payload',
+        { email: 'not-an-email', text: 'hi' },
+        buildMessage(),
+      ],
+    ] as const;
+
+    beforeEach(() => {
+      notifyEmail.mockRejectedValue(new Error('SMTP down'));
+      channel.publish.mockReturnValue(false);
+    });
+
+    it.each(dlqCases)(
+      'waits for drain before acking (%s)',
+      async (_case, payload, message) => {
+        const handling = handle(payload, message);
+        await flushAsync();
+
+        expect(channel.publish).toHaveBeenCalledTimes(1);
+        expect(channel.ack).not.toHaveBeenCalled();
+
+        channel.emit('drain');
+        await handling;
+
+        expect(channel.ack).toHaveBeenCalledWith(message);
+      },
+    );
+
+    it.each(dlqCases)(
+      'resolves the handler only after the message is acked (%s)',
+      async (_case, payload, message) => {
+        let isSettled = false;
+        const handling = handle(payload, message).then(() => {
+          isSettled = true;
+        });
+        await flushAsync();
+
+        expect(isSettled).toBe(false);
+
+        channel.emit('drain');
+        await handling;
+
+        expect(channel.ack).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it('leaves the message unacked when the channel fails while waiting for drain', async () => {
+      const channelError = new Error('channel closed');
+      const handling = handle(VALID_PAYLOAD, buildMessage(4));
+      await flushAsync();
+
+      channel.emit('error', channelError);
+      await handling;
+
+      expect(channel.ack).not.toHaveBeenCalled();
+      expect(channel.nack).not.toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledWith(
+        { err: channelError },
+        'failed to move message to DLQ',
+      );
+    });
+  });
+
+  describe('DLQ publish failure', () => {
+    it('leaves the message unacked so the broker redelivers it', async () => {
+      const publishError = new Error('Channel closed');
+      notifyEmail.mockRejectedValue(new Error('SMTP down'));
+      channel.publish.mockImplementation(() => {
+        throw publishError;
+      });
+
+      await handle(VALID_PAYLOAD, buildMessage(4));
+
+      expect(channel.ack).not.toHaveBeenCalled();
+      expect(channel.nack).not.toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledWith(
+        { err: publishError },
+        'failed to move message to DLQ',
+      );
     });
   });
 

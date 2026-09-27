@@ -60,8 +60,6 @@ describe('Notifications over RabbitMQ (integration)', () => {
   });
 
   beforeEach(async () => {
-    jest.spyOn(console, 'warn').mockImplementation(() => {});
-    jest.spyOn(console, 'error').mockImplementation(() => {});
     notifyEmail.mockReset().mockResolvedValue(undefined);
     for (const queue of [
       NOTIFICATIONS_QUEUE,
@@ -71,8 +69,6 @@ describe('Notifications over RabbitMQ (integration)', () => {
       await channel.purgeQueue(queue);
     }
   });
-
-  afterEach(() => jest.restoreAllMocks());
 
   async function startNotificationsMicroservice(url: string) {
     const moduleRef = await Test.createTestingModule({
