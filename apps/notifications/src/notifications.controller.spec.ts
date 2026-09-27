@@ -84,10 +84,7 @@ describe('NotificationsController', () => {
   afterEach(() => jest.restoreAllMocks());
 
   async function handle(payload: object, message = buildMessage()) {
-    await controller.notifyEmail(
-      payload as NotifyEmailDto,
-      buildContext(channel, message),
-    );
+    await controller.notifyEmail(payload, buildContext(channel, message));
     return message;
   }
 
@@ -202,6 +199,42 @@ describe('NotificationsController', () => {
       });
     });
 
+    // Each retry cycle adds a main-queue "rejected" and a retry-queue "expired"
+    // entry; RabbitMQ keeps the most recent death first
+    it.each<[string, DeathEntry[], number]>([
+      [
+        'retry-queue expiries ahead of the rejection',
+        [
+          { queue: NOTIFICATIONS_RETRY_QUEUE, reason: 'expired', count: 9 },
+          { queue: NOTIFICATIONS_QUEUE, reason: 'rejected', count: 2 },
+        ],
+        3,
+      ],
+      [
+        'a rejection from another queue',
+        [
+          { queue: 'some.other.queue', reason: 'rejected', count: 7 },
+          { queue: NOTIFICATIONS_QUEUE, reason: 'rejected', count: 1 },
+        ],
+        2,
+      ],
+      [
+        'only non-rejection deaths',
+        [{ queue: NOTIFICATIONS_QUEUE, reason: 'expired', count: 3 }],
+        1,
+      ],
+    ])(
+      'counts only main-queue rejections with %s',
+      async (_case, deaths, attempt) => {
+        await handle({ email: 'not-an-email' }, buildMessage(0, {}, deaths));
+
+        expect(getDlqPublishOptions().headers).toHaveProperty(
+          'x-attempts',
+          attempt,
+        );
+      },
+    );
+
     it('counts attempts from the main queue rejection, not from index 0 of x-death', async () => {
       const message = buildMessage(0, {}, [
         { queue: 'some.other.queue', reason: 'expired', count: 1 },
@@ -274,16 +307,17 @@ describe('NotificationsController', () => {
       },
     );
 
-    it('leaves the message unacked when the channel fails while waiting for drain', async () => {
+    it('nacks to the retry queue when the channel fails while waiting for drain', async () => {
       const channelError = new Error('channel closed');
-      const handling = handle(VALID_PAYLOAD, buildMessage(4));
+      const message = buildMessage(4);
+      const handling = handle(VALID_PAYLOAD, message);
       await flushAsync();
 
       channel.emit('error', channelError);
       await handling;
 
       expect(channel.ack).not.toHaveBeenCalled();
-      expect(channel.nack).not.toHaveBeenCalled();
+      expect(channel.nack).toHaveBeenCalledWith(message, false, false);
       expect(errorLog).toHaveBeenCalledWith(
         { err: channelError },
         'failed to move message to DLQ',
@@ -292,20 +326,38 @@ describe('NotificationsController', () => {
   });
 
   describe('DLQ publish failure', () => {
-    it('leaves the message unacked so the broker redelivers it', async () => {
-      const publishError = new Error('Channel closed');
+    const publishError = new Error('Channel closed');
+
+    beforeEach(() => {
       notifyEmail.mockRejectedValue(new Error('SMTP down'));
       channel.publish.mockImplementation(() => {
         throw publishError;
       });
+    });
 
-      await handle(VALID_PAYLOAD, buildMessage(4));
+    it('nacks without requeue so the message retries the DLQ after the delay', async () => {
+      const message = await handle(VALID_PAYLOAD, buildMessage(4));
 
       expect(channel.ack).not.toHaveBeenCalled();
-      expect(channel.nack).not.toHaveBeenCalled();
+      expect(channel.nack).toHaveBeenCalledWith(message, false, false);
       expect(errorLog).toHaveBeenCalledWith(
         { err: publishError },
         'failed to move message to DLQ',
+      );
+    });
+
+    it('does not throw when the channel is already dead', async () => {
+      const nackError = new Error('Channel closed');
+      channel.nack.mockImplementation(() => {
+        throw nackError;
+      });
+
+      await expect(
+        handle(VALID_PAYLOAD, buildMessage(4)),
+      ).resolves.toBeDefined();
+      expect(errorLog).toHaveBeenCalledWith(
+        { err: nackError },
+        'failed to nack message',
       );
     });
   });
@@ -328,6 +380,26 @@ describe('NotificationsController', () => {
           expect.any(Object),
         );
         expect(getDlqPublishOptions().headers).toHaveProperty('x-attempts', 1);
+        expect(channel.ack).toHaveBeenCalledWith(message);
+      },
+    );
+
+    it.each([
+      ['null', null],
+      ['a string', 'not json'],
+      ['missing data', undefined],
+    ])(
+      'sends a payload that is %s to the DLQ and acks it instead of throwing',
+      async (_case, payload) => {
+        const message = buildMessage();
+
+        await controller.notifyEmail(payload, buildContext(channel, message));
+
+        expect(notifyEmail).not.toHaveBeenCalled();
+        expect(getDlqPublishOptions().headers).toHaveProperty(
+          'x-failure-reason',
+          'payload must be an object',
+        );
         expect(channel.ack).toHaveBeenCalledWith(message);
       },
     );

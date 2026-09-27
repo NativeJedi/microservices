@@ -31,6 +31,10 @@ function formatValidationErrors(errors: ValidationError[]): string {
     .join('; ');
 }
 
+function isObject(data: unknown): data is object {
+  return typeof data === 'object' && data !== null;
+}
+
 @Controller()
 export class NotificationsController {
   private readonly logger = new Logger(NotificationsController.name);
@@ -42,13 +46,21 @@ export class NotificationsController {
   // acceptable here, so there is no deduplication by `eventId`.
   // Copy this handler for anything with real side effects and add one.
   @EventPattern('notify_email')
-  async notifyEmail(
-    @Payload() data: NotifyEmailDto,
-    @Ctx() context: RmqContext,
-  ) {
+  async notifyEmail(@Payload() data: unknown, @Ctx() context: RmqContext) {
     const channel = context.getChannelRef() as Channel;
     const message = context.getMessage() as ConsumeMessage;
     const attempt = getAttempt(message.properties.headers);
+
+    // class-validator throws on null/primitives, which would leave the message unacked
+    if (!isObject(data)) {
+      await this.moveToDlq(
+        channel,
+        message,
+        'payload must be an object',
+        attempt,
+      );
+      return;
+    }
 
     const dto = plainToInstance(NotifyEmailDto, data);
     const errors = await validate(dto);
@@ -116,6 +128,17 @@ export class NotificationsController {
       channel.ack(message);
     } catch (err: unknown) {
       this.logger.error({ err }, 'failed to move message to DLQ');
+      this.nackToRetry(channel, message);
+    }
+  }
+
+  // Goes through the retry queue and tries the DLQ again after the delay.
+  // If the channel is already dead, the broker redelivers the message anyway.
+  private nackToRetry(channel: Channel, message: ConsumeMessage) {
+    try {
+      channel.nack(message, false, false);
+    } catch (err: unknown) {
+      this.logger.error({ err }, 'failed to nack message');
     }
   }
 }

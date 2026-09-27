@@ -1,22 +1,23 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import Stripe from 'stripe';
 import { ConfigService } from '@nestjs/config';
-import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { NOTIFICATIONS_SERVICE } from '@app/common';
+import { RpcException } from '@nestjs/microservices';
+import { ChargeFailure } from '@app/common/dto/charge-result.dto';
 import { PaymentsCreateChargeDto } from './dto/payments-create-charge.dto';
 
-const toChargeFailure = (error: unknown) => {
+// Only errors that prove Stripe did NOT charge may fail the reservation.
+// Connection, api (5xx), idempotency conflict (a concurrent request with the
+// same key), rate limit, auth — the charge may exist, so the result is unknown.
+const toChargeFailure = (error: unknown): ChargeFailure => {
   if (error instanceof Stripe.errors.StripeCardError) {
-    return { kind: 'declined' as const, message: error.message };
+    return { kind: 'declined', message: error.message };
   }
 
-  if (error instanceof Stripe.errors.StripeError) {
-    // invalid_request, api_error, etc
-    return { kind: 'rejected' as const, message: error.message };
+  if (error instanceof Stripe.errors.StripeInvalidRequestError) {
+    return { kind: 'rejected', message: error.message };
   }
 
-  // network, timeout, etc
-  return { kind: 'unknown' as const, message: 'Payment status unknown' };
+  return { kind: 'unknown', message: 'Payment status unknown' };
 };
 
 @Injectable()
@@ -33,7 +34,13 @@ export class PaymentsService {
     );
   }
 
-  async createCharge({
+  async createCharge(charge: PaymentsCreateChargeDto) {
+    const intent = await this.createPaymentIntent(charge);
+    this.assertSucceeded(intent, charge.idempotencyKey);
+    return intent;
+  }
+
+  private async createPaymentIntent({
     paymentMethodId,
     amount,
     email,
@@ -47,6 +54,9 @@ export class PaymentsService {
           payment_method_types: ['card'],
           currency: 'usd',
           confirm: true,
+          // 3DS is not supported by this flow: fail as a card error instead
+          // of returning an unpaid intent in `requires_action`
+          error_on_requires_action: true,
           receipt_email: email, // stripe will send receipt to this email
         },
         { idempotencyKey },
@@ -55,5 +65,23 @@ export class PaymentsService {
       this.logger.error({ err: error, idempotencyKey }, 'charge failed');
       throw new RpcException(toChargeFailure(error));
     }
+  }
+
+  // `processing` and other non-final statuses mean the money is not settled yet
+  private assertSucceeded(
+    intent: Stripe.PaymentIntent,
+    idempotencyKey: string,
+  ) {
+    if (intent.status === 'succeeded') return;
+
+    this.logger.warn(
+      { paymentIntentId: intent.id, status: intent.status, idempotencyKey },
+      'charge not settled',
+    );
+    const failure: ChargeFailure = {
+      kind: 'unknown',
+      message: `Payment is ${intent.status}`,
+    };
+    throw new RpcException(failure);
   }
 }

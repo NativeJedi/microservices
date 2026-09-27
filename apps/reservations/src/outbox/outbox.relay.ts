@@ -2,7 +2,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Interval, SchedulerRegistry } from '@nestjs/schedule';
 import { ClientProxy } from '@nestjs/microservices';
-import { lastValueFrom } from 'rxjs';
+import { lastValueFrom, timeout } from 'rxjs';
 import { NOTIFICATIONS_SERVICE } from '@app/common';
 import { ReservationsRepository } from '../reservations.repository';
 import { ReservationDocument } from '../entities/reservation.entity';
@@ -11,6 +11,7 @@ const RELAY_INTERVAL_MS = 1_000;
 const LOCK_TTL_MS = 30_000; // time of locking document
 const BATCH_SIZE = 50; // count of documents to publish at one iteration
 const RELAY_INTERVAL = 'outbox-relay';
+const PUBLISH_TIMEOUT_MS = 10_000; // must stay below LOCK_TTL_MS
 
 // This service is responsible for publishing events from the outbox
 @Injectable()
@@ -39,6 +40,9 @@ export class OutboxRelay {
 
         try {
           await this.publishEvents(document);
+          // On failure the lock is kept on purpose: its expiry is the retry
+          // backoff, otherwise this loop would re-claim the same document now
+          await this.release(document);
         } catch (err) {
           if (err instanceof TypeError || err instanceof ReferenceError) {
             this.stop(err);
@@ -46,8 +50,6 @@ export class OutboxRelay {
           }
 
           this.logger.error({ err }, 'outbox relay failed');
-        } finally {
-          await this.release(document); // release lock even if publish failed
         }
       }
     } catch (err) {
@@ -74,9 +76,11 @@ export class OutboxRelay {
     );
   }
 
+  // Matching our own lockedUntil prevents releasing a lock that another
+  // instance took after ours had expired
   private release(document: ReservationDocument): Promise<unknown> {
     return this.repository.findOneAndUpdateOrNull(
-      { _id: document._id },
+      { _id: document._id, lockedUntil: document.lockedUntil },
       { $set: { lockedUntil: null } },
     );
   }
@@ -94,10 +98,9 @@ export class OutboxRelay {
     // deduplicate by `eventId` before acting.
     for (const event of document.outbox.filter((e) => !e.publishedAt)) {
       await lastValueFrom(
-        this.notifications.emit(event.pattern, {
-          ...event.payload,
-          eventId: event.eventId,
-        }),
+        this.notifications
+          .emit(event.pattern, { ...event.payload, eventId: event.eventId })
+          .pipe(timeout(PUBLISH_TIMEOUT_MS)),
       );
 
       await this.repository.findOneAndUpdateOrNull(

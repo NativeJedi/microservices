@@ -75,6 +75,9 @@ import { ReconciliationService } from './reconciliation.service';
             urls: [configService.getOrThrow<string>('RABBITMQ_URI')],
             queue: NOTIFICATIONS_QUEUE,
             queueOptions: NOTIFICATIONS_QUEUE_OPTIONS,
+            // The relay marks an event published once the broker confirms it,
+            // so it must survive a broker restart
+            persistent: true,
           },
         }),
         inject: [ConfigService],

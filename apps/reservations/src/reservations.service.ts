@@ -25,10 +25,10 @@ export class ReservationsService {
 
   async create(
     dto: CreateReservationDto,
-    { email, _id: userId }: UserDto,
+    user: UserDto,
     idempotencyKey: string,
   ): Promise<ReservationDocument> {
-    const clientKey = buildClientKey(userId, idempotencyKey);
+    const clientKey = buildClientKey(user._id, idempotencyKey);
 
     // Check if reservation is created
     const existing = await this.reservationsRepository.findOneOrNull({
@@ -38,7 +38,28 @@ export class ReservationsService {
     if (existing) return this.checkExistingReservation(existing);
 
     // 1. Creating of reservation in pending status
-    const reservation = await this.reservationsRepository
+    const reservation = await this.insertPending(dto, user, clientKey);
+
+    // A parallel request with the same key won the insert: never charge twice
+    if (!reservation) {
+      const created = await this.reservationsRepository.findOne({ clientKey });
+      return this.checkExistingReservation(created);
+    }
+
+    // 2. charging
+    const invoiceId = await this.chargeOrFail(reservation);
+
+    // 3. Confirmation of payment
+    return this.confirm(reservation, invoiceId);
+  }
+
+  /** Returns null when a reservation with the same clientKey already exists. */
+  private async insertPending(
+    dto: CreateReservationDto,
+    { email, _id: userId }: UserDto,
+    clientKey: string,
+  ): Promise<ReservationDocument | null> {
+    return this.reservationsRepository
       .create({
         startDate: dto.startDate,
         endDate: dto.endDate,
@@ -55,22 +76,16 @@ export class ReservationsService {
         lockedUntil: null,
         outbox: [],
       })
-      .catch(async (err) => {
-        if (!isDuplicateKeyError(err)) throw err;
-
-        const created = await this.reservationsRepository.findOneOrNull({
-          clientKey,
-        });
-
-        if (created) return this.checkExistingReservation(created);
-
+      .catch((err: unknown) => {
+        if (isDuplicateKeyError(err)) return null;
         throw err;
       });
+  }
 
-    // 2. charging
-    const invoiceId = await this.chargeOrFail(reservation);
-
-    // 3. Confirmation of payment
+  private async confirm(
+    reservation: ReservationDocument,
+    invoiceId: string,
+  ): Promise<ReservationDocument> {
     const confirmed = await this.reservationsRepository.findOneAndUpdateOrNull(
       { _id: reservation._id, status: 'pending' },
       {
@@ -78,19 +93,17 @@ export class ReservationsService {
         $push: {
           outbox: reservationConfirmedEvent(
             reservation._id,
-            email,
+            reservation.email,
             reservation.amount,
           ),
         },
       },
     );
 
-    // If someone already confirmed transaction (webhook, etc)
-    if (!confirmed) {
-      return this.reservationsRepository.findOne({ _id: reservation._id });
-    }
-
-    return confirmed;
+    // If someone already confirmed transaction (reconciliation, webhook, etc)
+    return (
+      confirmed ?? this.reservationsRepository.findOne({ _id: reservation._id })
+    );
   }
 
   private checkExistingReservation(
@@ -99,6 +112,10 @@ export class ReservationsService {
     // If it is pending - then it's a race
     if (reservation.status === 'pending') {
       throw new ConflictException('Reservation is being processed'); // 409
+    }
+
+    if (reservation.status === 'needs_review') {
+      throw new ConflictException('Reservation requires manual review');
     }
 
     if (reservation.status === 'failed') {
@@ -152,7 +169,12 @@ export class ReservationsService {
     );
   }
 
+  // A pending or needs_review reservation may have money in flight:
+  // deleting it would leave a charge without a record
   async remove(id: string) {
-    return this.reservationsRepository.findOneAndDelete({ _id: id });
+    return this.reservationsRepository.findOneAndDelete({
+      _id: id,
+      status: { $nin: ['pending', 'needs_review'] },
+    });
   }
 }
